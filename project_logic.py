@@ -52,7 +52,6 @@ class ProjectLogic:
                 if 'productTypes' in network and isinstance(network['productTypes'], list):
                     for product_type in network['productTypes']:
                         unique_product_types.add(product_type)
-            print (network.get("productTypes"))
         except Exception as e:
             logger.error(f"Error fetching unique product types: {e}", exc_info=True)
             # In a real application, you might want to return a default list

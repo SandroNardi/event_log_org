@@ -97,6 +97,9 @@ body {
     box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Subtle shadow */
 }
 
+.footer {
+    display: none;
+}
 .main-layout-container {
     display: flex;
     flex: 1; /* Takes remaining vertical space */

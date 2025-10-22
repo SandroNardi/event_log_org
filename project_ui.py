@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from pyecharts import options as opts
 from pyecharts.charts import Line, Page
-from pywebio.output import toast, use_scope, put_buttons, put_markdown, put_text, put_html,put_loading
+from pywebio.output import toast, use_scope, put_buttons, put_markdown, put_text, put_html,put_loading,clear
 from pywebio.input import input_group, checkbox, actions, input as pywebio_input, select
 
 # Project-specific imports
@@ -37,6 +37,7 @@ class ProjectUI:
     _project_logic: ProjectLogic
     logger: logging.Logger
     app_scope_name: str
+    _product_type: str
 
     def __init__(self, api_utils: MerakiAPIWrapper, app_scope_name: str) -> None:
         """
@@ -68,6 +69,7 @@ class ProjectUI:
             raise ValueError(error_message)
 
         try:
+            clear(self.app_scope_name)
             with use_scope(self.app_scope_name, clear=True):
                 # Display the currently selected organization's name and ID.
                 put_markdown(f"### Organization: {self._api_utils.get_organization_name()} (id: {self._api_utils.get_organization_id()})")
@@ -77,10 +79,10 @@ class ProjectUI:
                 # Assuming ProjectLogic has a method `get_unique_product_types`
                 # If not implemented yet, a hardcoded list is used as a fallback.
                 try:
-                    product_types = self._project_logic.get_unique_product_types()
+                    with put_loading():
+                        product_types = self._project_logic.get_unique_product_types()
                 except AttributeError:
                     logger.warning("`get_unique_product_types` not found in ProjectLogic. Using hardcoded list.")
-                    product_types = ['wireless', 'appliance', 'switch', 'security'] # Fallback hardcoded list
 
                 if not product_types:
                     put_text("No product types available for selection.")
@@ -99,13 +101,13 @@ class ProjectUI:
                         actions(
                             name="action",
                             buttons=[
-                                {"label": "View Logs", "value": "view_logs", "color": "primary"},
+                                {"label": "Select Categories", "value": "select_categories", "color": "primary"},
                             ]
                         )
                     ]
                 )
 
-                if form_data and form_data.get("action") == "view_logs":
+                if form_data and form_data.get("action") == "select_categories":
                     selected_product_type = form_data.get("product_type_selection")
                     if selected_product_type:
                         self.handle_product_type_selection(selected_product_type)
@@ -126,6 +128,7 @@ class ProjectUI:
         """
         logger.info(f"Handling product type selection: {product_type}")
         try:
+            # Now calls the first step of the new multi-step UI
             self.display_network_event_selection_ui(product_type)
         except Exception as e:
             logger.exception(f"An unexpected error occurred in handle_product_type_selection for product type '{product_type}': {e}")
@@ -134,70 +137,179 @@ class ProjectUI:
     def handle_main_menu_action(self, action: str) -> None:
         """
         Handles actions triggered from general navigation buttons (e.g., "Back to Main Menu").
+        This method is kept for backward compatibility but new navigation is handled
+        within the multi-step UI methods.
         """
         logger.info(f"Handling main menu action: {action}")
         try:
-            if action == "main_menu" or action == "networks_logs":
-                # "networks_logs" action now also leads back to the main menu
-                # to allow re-selection of product type.
+            if action == "main_menu":
                 self.app_main_menu()
+            # The 'networks_logs' action is now handled by more specific back buttons
+            # in the new multi-step flow.
         except Exception as e:
             logger.exception(f"An unexpected error occurred in handle_main_menu_action for action '{action}': {e}")
             toast(f"An unexpected error occurred: {e}", color="error", duration=0)
 
     def display_network_event_selection_ui(self, product_type: str) -> None:
         """
-        Displays a UI allowing the user to select multiple network event types,
-        grouped by category, and specify a lookback period for analysis.
-        The UI is tailored for the given product_type.
+        Displays a UI allowing the user to select multiple network event categories using checkboxes.
+        This is the first step in a multi-stage event selection process.
         """
-        logger.info(f"Entering display_network_event_selection_ui function for product type: {product_type}.")
-
+        logger.info(f"Entering display_network_event_selection_ui (category selection) for product type: {product_type}.")
+        clear(self.app_scope_name)
         with use_scope(self.app_scope_name, clear=True):
-            all_event_definitions = self._project_logic.get_filtered_event_types(
-                product_type=product_type,
-                event_category=None # Get all categories for the selected product type
-            )
+            with put_loading():
+                all_event_definitions = self._project_logic.get_filtered_event_types(
+                    product_type=product_type,
+                    event_category=None # Get all categories for the selected product type
+                )
 
             if not all_event_definitions:
-                put_text(f"No network event types found for {product_type} networks or an error occurred.")
+                toast(f"No network event types found for {product_type} networks or an error occurred.",color="warn")
                 put_buttons([{"label": "Back to Main Menu", "value": "main_menu"}], onclick=self.handle_main_menu_action)
                 return
 
-            categorized_events: Dict[str, List[Dict[str, str]]] = {}
-            for event_def in all_event_definitions:
-                print(event_def)
-                category = event_def.get("category", "Uncategorized")
-                if category not in categorized_events:
-                    categorized_events[category] = []
-                categorized_events[category].append(event_def)
+            unique_categories = sorted(list(set(ed.get("category", "Uncategorized") for ed in all_event_definitions)))
 
-            all_checkbox_options: List[Tuple[str, str]] = []
-
-            sorted_categories = sorted(categorized_events.keys())
-            for category in sorted_categories:
-                sorted_events_in_category = sorted(categorized_events[category], key=lambda x: x.get("type", ""))
-                for event_def in sorted_events_in_category:
-                    event_type = event_def.get("type", "Unknown Type")
-                    description = event_def.get("description", "No description available")
-                    all_checkbox_options.append((f"[{category}] - {description}", event_type))
+            category_checkbox_options: List[Tuple[str, str]] = []
+            for category in unique_categories:
+                category_checkbox_options.append((category, category))
 
             form_data = input_group(
-                f"{product_type.capitalize()} Event Type and Timeframe Selection",
+                f"Select Categories for network events",
+                [
+                    checkbox(
+                        name="selected_categories",
+                        options=category_checkbox_options,
+                        help_text="Check one or more categories to view their event types."
+                    ),
+                    actions(
+                        name="action",
+                        buttons=[
+                            {"label": "Continue to Event Types", "value": "continue_to_event_types", "color": "primary"},
+                            {"label": "Back to Main Menu", "value": "main_menu", "color": "secondary"}
+                        ]
+                    )
+                ]
+            )
+
+            if form_data:
+                action = form_data.get("action")
+                selected_categories: List[str] = form_data.get("selected_categories", [])
+
+                if action == "continue_to_event_types":
+                    if not selected_categories:
+                        toast("Please select at least one category.", color="warn")
+                        # Re-render this step to allow selection again
+                        self.display_network_event_selection_ui(product_type)
+                        return
+                    # Call the next step with the selected categories
+                    self._display_event_types_for_selected_categories(product_type, selected_categories)
+                elif action == "main_menu":
+                    self.app_main_menu()
+            else:
+                put_text("No selection made or action cancelled.")
+                self.app_main_menu() # Go back to main menu if cancelled
+
+    def _display_event_types_for_selected_categories(self, product_type: str, selected_categories: List[str], previously_selected_types: Optional[List[str]] = None) -> None:
+        """
+        Displays event types aggregated from chosen categories and allows selection.
+        This is the second step in the multi-stage event selection process.
+        """
+        logger.info(f"Displaying event types for selected categories: {selected_categories} for product type: {product_type}")
+        clear(self.app_scope_name)
+        with use_scope(self.app_scope_name, clear=True):
+
+            # Get all event definitions for the selected product type
+            all_event_definitions = self._project_logic.get_filtered_event_types(
+                product_type=product_type,
+                event_category=None # Get all to filter by selected_categories
+            )
+
+            # Filter event definitions based on selected_categories
+            filtered_event_definitions = [
+                ed for ed in all_event_definitions
+                if ed.get("category", "Uncategorized") in selected_categories
+            ]
+
+            if not filtered_event_definitions:
+                put_text(f"No event types found for the selected categories: {', '.join(selected_categories)}.")
+                put_buttons([{"label": "Back to Main Menu", "value": "main_menu"}],
+                            onclick=lambda btn: self._handle_navigation_from_event_types_no_events(product_type, btn))
+                return
+
+            checkbox_options: List[Tuple[str, str]] = []
+            # Sort events by category then by type for better readability
+            sorted_filtered_events = sorted(filtered_event_definitions, key=lambda x: (x.get("category", ""), x.get("type", "")))
+
+            for event_def in sorted_filtered_events:
+                event_type = event_def.get("type", "Unknown Type")
+                description = event_def.get("description", "No description available")
+                category = event_def.get("category", "Uncategorized")
+                checkbox_options.append((f"[{category.capitalize()}] {description} ({event_type})", event_type))
+
+            # --- MODIFICATION START ---
+            # If previously_selected_types is None, it means this is the initial load,
+            # so select all available event types by default.
+            if previously_selected_types is None:
+                previously_selected_types = [opt[1] for opt in checkbox_options]
+            # --- MODIFICATION END ---
+
+            form_data = input_group(
+                f"Select Event Types",
+                [
+                    checkbox(
+                        name="selected_event_types",
+                        options=checkbox_options,
+                        value=previously_selected_types, # Pre-fill if coming back or initially selecting all
+                        help_text="Check all event types you wish to analyze."
+                    ),
+                    actions(
+                        name="action",
+                        buttons=[
+                            {"label": "Continue to Timeframe", "value": "continue_to_timeframe", "color": "primary"},
+                            {"label": "Back to Main Menu", "value": "main_menu", "color": "secondary"}
+                        ]
+                    )
+                ]
+            )
+
+            if form_data:
+                action = form_data.get("action")
+                selected_types: List[str] = form_data.get("selected_event_types", [])
+
+                if action == "continue_to_timeframe":
+                    if not selected_types:
+                        toast("Please select at least one event type.", color="warn")
+                        # Re-render this step to allow selection again
+                        self._display_event_types_for_selected_categories(product_type, selected_categories, previously_selected_types=selected_types)
+                        return
+                    self._display_lookback_period_selection(product_type, selected_categories, selected_types) # Pass selected_categories list
+                elif action == "main_menu":
+                    self.app_main_menu()
+            else:
+                put_text("No selection made or action cancelled.")
+                self.display_network_event_selection_ui(product_type) # Go back to category selection if cancelled
+
+    def _display_lookback_period_selection(self, product_type: str, selected_categories: List[str], selected_event_types: List[str], previously_days_lookback: Optional[int] = None) -> None:
+        """
+        Displays the UI for selecting the lookback period and generating the report.
+        This is the third and final step in the multi-stage event selection process.
+        """
+        logger.info(f"Displaying lookback period selection for product type: {product_type}, categories: {selected_categories}, event types: {selected_event_types}")
+        clear(self.app_scope_name)
+        with use_scope(self.app_scope_name, clear=True):
+            form_data = input_group(
+                "Timeframe Selection",
                 [
                     pywebio_input(
                         name="days_lookback",
                         label="Days to look back for events",
                         type="number",
-                        value=7,
+                        value=previously_days_lookback if previously_days_lookback else 7,
                         min=1,
                         max=90,
                         help_text="Enter the number of days to retrieve events for (max 90)."
-                    ),
-                    checkbox(
-                        name="selected_event_types",
-                        options=all_checkbox_options,
-                        help_text="Check all event types you wish to analyze."
                     ),
                     actions(
                         name="action",
@@ -210,45 +322,65 @@ class ProjectUI:
             )
 
             if form_data:
-                if form_data.get("action") == "generate_report":
-                    selected_types: List[str] = form_data.get("selected_event_types", [])
-                    days_lookback_raw = form_data.get("days_lookback")
+                action = form_data.get("action")
+                days_lookback_raw = form_data.get("days_lookback")
 
-                    if not selected_types:
-                        toast("Please select at least one event type.", color="warn")
-                        self.display_network_event_selection_ui(product_type)
-                        return
-
+                if action == "generate_report":
                     try:
                         days_lookback: int = int(days_lookback_raw)
                         if not (1 <= days_lookback <= 90):
                             toast("Days lookback must be a number between 1 and 90.", color="warn")
-                            self.display_network_event_selection_ui(product_type)
+                            self._display_lookback_period_selection(product_type, selected_categories, selected_event_types, previously_days_lookback=days_lookback)
                             return
                     except (ValueError, TypeError):
                         toast("Invalid value for 'Days to look back'. Please enter a number.", color="warn")
-                        self.display_network_event_selection_ui(product_type)
+                        self._display_lookback_period_selection(product_type, selected_categories, selected_event_types)
                         return
 
-                    toast("Fetching event counts... This may take a moment.", color="info", duration=5)
-                    with put_loading():
-                        event_counts_data = self._project_logic.get_network_event_counts(
-                        product_type=product_type,
-                        selected_event_types=selected_types,
-                        days_lookback=days_lookback
-                    )
+                    self._generate_report_and_graph(product_type, selected_event_types, days_lookback, selected_categories) # Pass selected_categories list
 
-                    with use_scope(self.app_scope_name, clear=True):
-                        self.display_event_counts_graph(product_type, event_counts_data, days_lookback, f"{product_type.capitalize()} Network Event Counts")
-                        put_buttons([{"label": "Back to Event Selection", "value": "networks_logs"},
-                                     {"label": "Back to Main Menu", "value": "main_menu"}],
-                                    onclick=self.handle_main_menu_action)
-
-                elif form_data.get("action") == "main_menu":
+                elif action == "main_menu":
                     self.app_main_menu()
             else:
                 put_text("No selection made or action cancelled.")
-                put_buttons([{"label": "Back to Main Menu", "value": "main_menu"}], onclick=self.handle_main_menu_action)
+                self._display_event_types_for_selected_categories(product_type, selected_categories, previously_selected_types=selected_event_types)
+
+    def _generate_report_and_graph(self, product_type: str, selected_event_types: List[str], days_lookback: int, selected_categories: List[str]) -> None:
+        """
+        Fetches event counts and displays the graph. This is the final display step.
+        """
+        logger.info(f"Generating report for product type: {product_type}, event types: {selected_event_types}, days_lookback: {days_lookback}, categories: {selected_categories}")
+
+        toast("Fetching event counts... This may take a moment.", color="info", duration=5)
+        with put_loading():
+            event_counts_data = self._project_logic.get_network_event_counts(
+                product_type=product_type,
+                selected_event_types=selected_event_types,
+                days_lookback=days_lookback
+            )
+        clear(self.app_scope_name)
+        with use_scope(self.app_scope_name, clear=True):
+            display_title = f"{product_type.capitalize()} Network Event Counts for Categories: {', '.join([c.capitalize() for c in selected_categories])}"
+            put_buttons([{"label": "Back to Main Menu", "value": "main_menu", "color": "secondary"}],
+                        onclick=lambda btn_val: self._handle_navigation_from_report(btn_val))
+            self.display_event_counts_graph(product_type, event_counts_data, days_lookback, display_title)
+
+            put_buttons([{"label": "Back to Main Menu", "value": "main_menu", "color": "secondary"}],
+                        onclick=lambda btn_val: self._handle_navigation_from_report(btn_val))
+
+    def _handle_navigation_from_report(self, action: str, ) -> None:
+        """
+        Handles navigation actions from the report display.
+        """
+        if action == "main_menu":
+            self.app_main_menu()
+
+    def _handle_navigation_from_event_types_no_events(self, product_type: str, action: str) -> None:
+        """
+        Handles navigation actions from event type selection when no events are found for a category.
+        """
+        if action == "main_menu":
+            self.app_main_menu()
 
     def display_event_counts_graph(self, product_type: str, event_counts_data: Dict[str, Dict[str, Dict[str, int]]], days_lookback: int, display_title: str) -> None:
         """
@@ -294,16 +426,41 @@ class ProjectUI:
         full_date_range = pd.date_range(start=start_date, end=today_date, freq='D').date
         full_date_range_str = [d.strftime('%Y-%m-%d') for d in full_date_range]
 
+        # --- MODIFICATION START ---
+        # Fetch all event definitions for the product type to get descriptions and categories
+        all_event_definitions = self._project_logic.get_filtered_event_types(
+            product_type=product_type,
+            event_category=None # Get all to build the lookup
+        )
+        event_details_map = {
+            ed.get("type"): {
+                "description": ed.get("description", "No description available"),
+                "category": ed.get("category", "Uncategorized")
+            }
+            for ed in all_event_definitions if ed.get("type")
+        }
+        # --- MODIFICATION END ---
+
+
         for target_event_type in sorted(df_all_events['EventType'].unique()):
             df_event_type = df_all_events[df_all_events['EventType'] == target_event_type]
 
             network_series_data_map = {}
 
+            # --- MODIFICATION START ---
+            event_detail = event_details_map.get(target_event_type, {})
+            event_description = event_detail.get("description", target_event_type)
+            event_category = event_detail.get("category", "Uncategorized").capitalize()
+            graph_title = f"[{event_category}] {event_description} ({target_event_type})"
+            # --- MODIFICATION END ---
+
             l = (
                 Line(init_opts=opts.InitOpts(width="1400px", height="325px")) # Y-axis height halved
                 .add_xaxis(xaxis_data=full_date_range_str)
                 .set_global_opts(
-                    title_opts=opts.TitleOpts(title=f"Daily '{target_event_type}' Events"),
+                    # --- MODIFICATION START ---
+                    title_opts=opts.TitleOpts(title=graph_title),
+                    # --- MODIFICATION END ---
                     tooltip_opts=opts.TooltipOpts(trigger="axis"),
                     yaxis_opts=opts.AxisOpts(
                         type_="value",

@@ -25,7 +25,7 @@ logger = setup_logger(enable_logging=True, console_logging=True, file_logging=Tr
 required_app_setup_param: dict[str, bool] = {"api_key": True, "organization_id": True, "network_id": False}
 
 # Application setup parameters, potentially from environment variables or defaults.
-app_setup_param: dict[str, str | None] = {"api_key": os.getenv("MK_CSM_KEY"), "organization_id": "1234"}
+app_setup_param: dict[str, str | None] = {"api_key": os.getenv("MK_CSM_KEY"), "organization_id": os.getenv("MK_MAIN_ORG")}
 
 # Define the scope name for the application's UI.
 app_scope_name: str = "app"

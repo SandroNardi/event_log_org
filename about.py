@@ -1,13 +1,13 @@
 # app_info.py
 
 APP_INFO = {
-    "name": "---App name", # Placeholder
-    "description": "---App ddescriptionesripyion", # Placeholder 
+    "name": "Network event graph over time",
+    "description": "This app enables users to select a network type, specific log categories, and events, as well as define a time frame of up to 90 days. It then displays the daily count of events for each network where those events occurred.",  
     "author": "SandroN",
     "version": "1.0.0",
     "links": {
-        "GitHub Repository": "https://github.com/SandroN/mx_local_dns_app", # Placeholder
-        "Project Documentation": "https://docs.example.com/mx_local_dns_app" # Placeholder
+        "GitHub Repository": "https://github.com/SandroNardi/event_log_org", # Placeholder
+        "Project Documentation": "https://github.com/SandroNardi/event_log_org" # Placeholder
     },
     "license_name": "MIT License",
     "license_text": """
